@@ -18,6 +18,15 @@ def decompose_prompt(prompt: str) -> list:
     # Define connectors to split on
     connectors = ["and", ",", "then", "also", "along with"]
     
+    # Check for comparison keywords - if present, do NOT split on "and"
+    comparison_keywords = ["compare", "difference", "vs", "versus"]
+    lower_prompt = prompt.lower()
+    is_comparison = any(keyword in lower_prompt for keyword in comparison_keywords)
+    
+    # Remove "and" from connectors if this is a comparison sentence
+    if is_comparison:
+        connectors = [c for c in connectors if c != "and"]
+    
     # Build regex pattern for splitting
     # Use word boundaries for text connectors to avoid splitting mid-word
     pattern_parts = []
@@ -29,8 +38,11 @@ def decompose_prompt(prompt: str) -> list:
     
     pattern = '|'.join(pattern_parts)
     
-    # Split the prompt
-    parts = re.split(pattern, prompt, flags=re.IGNORECASE)
+    # Split the prompt (only if we have patterns to split on)
+    if pattern:
+        parts = re.split(pattern, prompt, flags=re.IGNORECASE)
+    else:
+        parts = [prompt]
     
     # Clean each part
     cleaned_parts = []

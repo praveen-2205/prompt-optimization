@@ -29,8 +29,9 @@ def is_ambiguous(prompt: str) -> bool:
     
     # Domain-specific keywords that provide clarity
     domain_keywords = [
-        "machine learning", "neural", "database", "python",
-        "business", "medical", "physics"
+        "cnn", "neural", "network", "classification", "regression",
+        "database", "python", "algorithm", "model training",
+        "machine learning", "deep learning"
     ]
     
     # Check if contains vague words

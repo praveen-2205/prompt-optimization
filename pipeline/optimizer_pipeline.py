@@ -13,11 +13,17 @@ try:
     from pipeline.scoring_engine import score_prompt
     from pipeline.ambiguity_detector import is_ambiguous
     from pipeline.decomposition_engine import decompose_prompt
+    from pipeline.context_handler import needs_context
+    from pipeline.llm_reasoner import needs_llm_assistance, llm_rewrite_prompt
+    from pipeline.llm_interface import generate_final_answer
 except ImportError:
     from intent_handler import detect_intents
     from scoring_engine import score_prompt
     from ambiguity_detector import is_ambiguous
     from decomposition_engine import decompose_prompt
+    from context_handler import needs_context
+    from llm_reasoner import needs_llm_assistance, llm_rewrite_prompt
+    from llm_interface import generate_final_answer
 
 
 def _build_instructions_for_intents(intents: list) -> list:
@@ -51,8 +57,8 @@ def _build_instructions_for_intents(intents: list) -> list:
         instructions.append("Present the explanation step-by-step like a tutorial.")
     
     # Add creative tone only if task is not technical coding
-if "creative" in intents and "coding" not in intents:
-    instructions.append("Use engaging and vivid language.")
+    if "creative" in intents and "coding" not in intents:
+        instructions.append("Use engaging and vivid language.")
 
     
     # If no specific instructions, add a default one
@@ -62,74 +68,92 @@ if "creative" in intents and "coding" not in intents:
     return instructions
 
 
-def optimize_prompt(raw_prompt: str) -> str:
+def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
     """
     Optimize a raw user prompt for improved clarity and structure.
     
     Args:
         raw_prompt: The original user input prompt.
+        previous_context: Optional context from previous interactions.
         
     Returns:
         An optimized prompt with improved clarity and structure.
     """
-    # Step A — Clean the input
-    cleaned = raw_prompt.strip()
-    cleaned = ' '.join(cleaned.split())  # Remove extra spaces
+    # STEP 1 — Attach context (MUST be first, before any checks)
+    if previous_context and needs_context(raw_prompt):
+        raw_prompt = f"Considering the previous context: {previous_context}. Now perform this request: {raw_prompt}"
     
-    if not cleaned:
-        return ""
-    
-    # Capitalize first letter
-    cleaned = cleaned[0].upper() + cleaned[1:] if len(cleaned) > 1 else cleaned.upper()
-    
-    # Step B — Score the prompt
+    # STEP 2 — Score the prompt (now with context attached)
     score_data = score_prompt(raw_prompt)
     total_score = score_data["total_score"]
     
-    # Step C — Decision logic based on score
+    # STEP 3 — If score <= 3, request clarification
     if total_score <= 3:
         return (
             "The request is unclear or too vague. Please provide more details about "
             "what you want. For example, specify the topic, format, or type of output."
         )
     
-    # Step D — Ambiguity check (aggressive optimization: applies to all prompts with score > 3)
-    if is_ambiguous(raw_prompt):
+    # STEP 4 — Ambiguity detection (AFTER context is attached)
+    ambiguity_flag = is_ambiguous(raw_prompt)
+    if ambiguity_flag:
         return (
             "Your request is too broad or ambiguous. Please clarify the domain or context. "
             "For example, specify whether this relates to technology, business, science, or another field."
         )
     
-    # Step E — Decompose prompt into subtasks
+    # STEP 5 — LLM rewrite decision based on quality
+    low_quality = score_data["total_score"] < 6
+    is_vague = ambiguity_flag
+    
+    llm_triggered = False
+    if low_quality or is_vague:
+        print("[LLM Rewrite Triggered]")
+        llm_triggered = True
+        raw_prompt = llm_rewrite_prompt(raw_prompt)
+    
+    # STEP 6 — Decompose prompt into subtasks
     subtasks = decompose_prompt(raw_prompt)
     
-    # Step F — Build optimized output for each subtask
+    # STEP 7 & 8 — Intent detection and instruction building for each subtask
     optimized_output = ""
     
+    if llm_triggered:
+        optimized_output += "[LLM Rewrite Triggered]\n\n"
+    
     for subtask in subtasks:
-        # Detect intents for this subtask
+        # STEP 7 — Detect intents for this subtask
         intents = detect_intents(subtask)
         
-        # Build instructions for this subtask
+        # STEP 8 — Build instructions for this subtask
         instructions = _build_instructions_for_intents(intents)
         
         # Format subtask output
         instructions_text = "\n".join(f"- {inst}" for inst in instructions)
         optimized_output += f"Sub-Task: {subtask}\nInstructions:\n{instructions_text}\n\n"
     
-    return optimized_output.strip()
+    # STEP 9 — Debug print: show optimized prompt
+    print("----- OPTIMIZED PROMPT -----")
+    print(optimized_output)
+    print("-" * 40)
+    
+    return optimized_output
 
 
 if __name__ == "__main__":
     tests = [
-        "Write python code to sort a list",           # High quality
-        "Explain CNN and compare with RNN",           # Multi-task
-        "tell me something",                          # Vague
-        "Explain models"                              # Ambiguous
-    ]
+        ("Explain CNN and compare with RNN", None),
+        ("I am confused about overfitting and dropout, help me understand simply", None),
+        ("Write python code for linear regression and explain", None),
+        ("Compare Convolutional Neural Networks (CNN) and Recurrent Neural Networks (RNN) in a table, including their architecture, data type handled, strengths, weaknesses, and common applications.", None)
+        ]
 
-    for t in tests:
-        print("INPUT:", t)
-        print("OUTPUT:", optimize_prompt(t))
-        print("-" * 50)
+    for prompt, ctx in tests:
+        print("=" * 60)
+        print("ORIGINAL PROMPT:", prompt)
+        print("=" * 60)
+        result = optimize_prompt(prompt, ctx)
+        print("\n----- GEMINI FINAL ANSWER -----")
+        print(result)
+        print("\n" + "=" * 60 + "\n")
 
