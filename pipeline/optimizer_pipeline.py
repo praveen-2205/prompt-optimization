@@ -1,76 +1,35 @@
 """
-This module is the base prompt optimizer. It improves clarity before advanced modules are applied.
+Optimizer Pipeline Module
 
-The optimizer applies rule-based transformations to raw user prompts to:
-- Clean and normalize input text
-- Detect user intent using the intent handler
-- Apply intent-specific optimization templates
-- Wrap general prompts with clear task structure
+The main prompt optimization pipeline that runs all analysis modules.
+All detection is LLM-powered with no hardcoded rules.
+
+The optimizer ALWAYS outputs an optimized prompt - it never rejects prompts.
+When prompts are ambiguous or low quality, it uses LLM to improve them.
 """
 
+import time
+
 try:
-    from pipeline.intent_handler import detect_intents
+    from pipeline.intent_handler import detect_intents_full, detect_intents
     from pipeline.scoring_engine import score_prompt
-    from pipeline.ambiguity_detector import is_ambiguous
-    from pipeline.decomposition_engine import decompose_prompt
-    from pipeline.context_handler import needs_context
-    from pipeline.llm_reasoner import needs_llm_assistance, llm_rewrite_prompt
-    from pipeline.llm_interface import generate_final_answer
+    from pipeline.ambiguity_detector import detect_ambiguity, is_ambiguous
+    from pipeline.decomposition_engine import decompose_prompt_full, decompose_prompt
+    from pipeline.context_handler import detect_context_need, needs_context
+    from pipeline.llm_interface import llm_rewrite_prompt, generate_final_answer
 except ImportError:
-    from intent_handler import detect_intents
+    from intent_handler import detect_intents_full, detect_intents
     from scoring_engine import score_prompt
-    from ambiguity_detector import is_ambiguous
-    from decomposition_engine import decompose_prompt
-    from context_handler import needs_context
-    from llm_reasoner import needs_llm_assistance, llm_rewrite_prompt
-    from llm_interface import generate_final_answer
-
-
-def _build_instructions_for_intents(intents: list) -> list:
-    """
-    Build instruction list based on detected intents.
-    
-    Args:
-        intents: List of detected intent strings.
-        
-    Returns:
-        List of instruction strings.
-    """
-    instructions = []
-    
-    if "explanation" in intents:
-        instructions.append("Explain clearly in structured bullet points.")
-    
-    if "comparison" in intents:
-        instructions.append("Present the comparison in a table covering key differences and similarities.")
-    
-    if "coding" in intents:
-        instructions.append("Provide clean, well-commented code and explain the logic.")
-    
-    if "analysis" in intents:
-        instructions.append("Include analytical insights, pros, cons, and evaluation.")
-    
-    if "summarization" in intents:
-        instructions.append("Provide a concise summary highlighting key ideas.")
-    
-    if "tutorial" in intents:
-        instructions.append("Present the explanation step-by-step like a tutorial.")
-    
-    # Add creative tone only if task is not technical coding
-    if "creative" in intents and "coding" not in intents:
-        instructions.append("Use engaging and vivid language.")
-
-    
-    # If no specific instructions, add a default one
-    if not instructions:
-        instructions.append("Provide a clear and detailed response.")
-    
-    return instructions
+    from ambiguity_detector import detect_ambiguity, is_ambiguous
+    from decomposition_engine import decompose_prompt_full, decompose_prompt
+    from context_handler import detect_context_need, needs_context
+    from llm_interface import llm_rewrite_prompt, generate_final_answer
 
 
 def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
     """
-    Optimize a raw user prompt for improved clarity and structure.
+    Optimize a raw user prompt using LLM analysis.
+    ALWAYS outputs an optimized prompt - never rejects prompts.
     
     Args:
         raw_prompt: The original user input prompt.
@@ -79,60 +38,81 @@ def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
     Returns:
         An optimized prompt with improved clarity and structure.
     """
-    # STEP 1 — Attach context (MUST be first, before any checks)
-    if previous_context and needs_context(raw_prompt):
-        raw_prompt = f"Considering the previous context: {previous_context}. Now perform this request: {raw_prompt}"
+    start_time = time.time()
     
-    # STEP 2 — Score the prompt (now with context attached)
-    score_data = score_prompt(raw_prompt)
-    total_score = score_data["total_score"]
+    print("[LLM Analysis Starting...]")
     
-    # STEP 3 — If score <= 3, request clarification
-    if total_score <= 3:
-        return (
-            "The request is unclear or too vague. Please provide more details about "
-            "what you want. For example, specify the topic, format, or type of output."
-        )
+    # STEP 1 — Score the prompt
+    print("  [1/5] Scoring prompt...")
+    score_result = score_prompt(raw_prompt)
+    print(f"       Score: {score_result}")
     
-    # STEP 4 — Ambiguity detection (AFTER context is attached)
-    ambiguity_flag = is_ambiguous(raw_prompt)
-    if ambiguity_flag:
-        return (
-            "Your request is too broad or ambiguous. Please clarify the domain or context. "
-            "For example, specify whether this relates to technology, business, science, or another field."
-        )
+    # STEP 2 — Check ambiguity
+    print("  [2/5] Checking ambiguity...")
+    ambiguity_result = detect_ambiguity(raw_prompt)
+    print(f"       Ambiguity: {ambiguity_result}")
     
-    # STEP 5 — LLM rewrite decision based on quality
-    low_quality = score_data["total_score"] < 6
-    is_vague = ambiguity_flag
+    # STEP 3 — Check context needs
+    print("  [3/5] Checking context needs...")
+    context_result = detect_context_need(raw_prompt)
+    print(f"       Context: {context_result}")
+    
+    # STEP 4 — Detect intents
+    print("  [4/5] Detecting intents...")
+    intent_result = detect_intents_full(raw_prompt)
+    print(f"       Intent: {intent_result}")
+    
+    # STEP 5 — Decompose into subtasks
+    print("  [5/5] Decomposing prompt...")
+    decomposition_result = decompose_prompt_full(raw_prompt)
+    print(f"       Decomposition: {decomposition_result}")
+    
+    analysis_time = time.time() - start_time
+    print(f"[LLM Analysis Complete in {analysis_time:.2f}s]")
+    
+    # STEP 6 — Attach context if needed
+    working_prompt = raw_prompt
+    if previous_context and context_result.get("needs_context", False):
+        working_prompt = f"Considering the previous context: {previous_context}. Now perform: {raw_prompt}"
+    
+    # STEP 7 — LLM rewrite if prompt is ambiguous OR low quality score
+    # ALWAYS optimize, never reject!
+    total_score = score_result.get("total_score", 0)
+    is_ambiguous = ambiguity_result.get("is_ambiguous", False)
     
     llm_triggered = False
-    if low_quality or is_vague:
-        print("[LLM Rewrite Triggered]")
+    if total_score < 10 or is_ambiguous:
+        print("[LLM Rewrite Triggered - Improving prompt clarity]")
         llm_triggered = True
-        raw_prompt = llm_rewrite_prompt(raw_prompt)
+        working_prompt = llm_rewrite_prompt(working_prompt)
     
-    # STEP 6 — Decompose prompt into subtasks
-    subtasks = decompose_prompt(raw_prompt)
+    # STEP 8 — Build optimized output from decomposition and intents
+    subtasks = decomposition_result.get("subtasks", [working_prompt])
+    instructions = intent_result.get("instructions", ["Provide a clear and detailed response."])
     
-    # STEP 7 & 8 — Intent detection and instruction building for each subtask
+    # Format output
     optimized_output = ""
     
     if llm_triggered:
         optimized_output += "[LLM Rewrite Triggered]\n\n"
     
-    for subtask in subtasks:
-        # STEP 7 — Detect intents for this subtask
-        intents = detect_intents(subtask)
-        
-        # STEP 8 — Build instructions for this subtask
-        instructions = _build_instructions_for_intents(intents)
-        
-        # Format subtask output
-        instructions_text = "\n".join(f"- {inst}" for inst in instructions)
-        optimized_output += f"Sub-Task: {subtask}\nInstructions:\n{instructions_text}\n\n"
+    # Add subtasks
+    if len(subtasks) > 1:
+        for i, subtask in enumerate(subtasks, 1):
+            optimized_output += f"Sub-Task {i}: {subtask}\n"
+        optimized_output += "\n"
+    else:
+        optimized_output += f"Task: {subtasks[0]}\n\n"
     
-    # STEP 9 — Debug print: show optimized prompt
+    # Add instructions
+    optimized_output += "Instructions:\n"
+    for inst in instructions:
+        optimized_output += f"- {inst}\n"
+    
+    # Add score info
+    optimized_output += f"\n[Quality Score: {total_score}/15]"
+    
+    # Debug output
     print("----- OPTIMIZED PROMPT -----")
     print(optimized_output)
     print("-" * 40)
@@ -143,17 +123,14 @@ def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
 if __name__ == "__main__":
     tests = [
         ("Explain CNN and compare with RNN", None),
-        ("I am confused about overfitting and dropout, help me understand simply", None),
         ("Write python code for linear regression and explain", None),
-        ("Compare Convolutional Neural Networks (CNN) and Recurrent Neural Networks (RNN) in a table, including their architecture, data type handled, strengths, weaknesses, and common applications.", None)
-        ]
+    ]
 
     for prompt, ctx in tests:
         print("=" * 60)
         print("ORIGINAL PROMPT:", prompt)
         print("=" * 60)
         result = optimize_prompt(prompt, ctx)
-        print("\n----- GEMINI FINAL ANSWER -----")
+        print("\n----- RESULT -----")
         print(result)
         print("\n" + "=" * 60 + "\n")
-

@@ -1,13 +1,37 @@
 """
-Breaks complex prompts into multiple actionable sub-tasks.
+Decomposition Engine Module
+
+Breaks complex prompts into multiple actionable sub-tasks using LLM analysis.
+All decomposition is LLM-powered with no hardcoded rules.
 """
 
-import re
+try:
+    from pipeline.llm_interface import call_gemini_json, call_gemini_json_async
+except ImportError:
+    from llm_interface import call_gemini_json, call_gemini_json_async
+
+
+DECOMPOSITION_PROMPT = '''Break down the following user prompt into actionable sub-tasks.
+
+Rules:
+- Only split if there are genuinely distinct tasks
+- Keep comparison tasks together (e.g., "compare X and Y" is ONE task, not two)
+- Each subtask should be self-contained and actionable
+- If the prompt is simple, return it as a single subtask
+- Order subtasks logically (dependencies first)
+
+User Prompt: "{prompt}"
+
+Respond in JSON format:
+{{
+    "subtasks": ["subtask 1", "subtask 2", ...],
+    "reasoning": "brief explanation of how you decomposed it"
+}}'''
 
 
 def decompose_prompt(prompt: str) -> list:
     """
-    Breaks complex prompts into multiple actionable sub-tasks.
+    Breaks complex prompts into sub-tasks using LLM.
     
     Args:
         prompt: The user's input prompt.
@@ -15,72 +39,52 @@ def decompose_prompt(prompt: str) -> list:
     Returns:
         A list of sub-tasks extracted from the prompt.
     """
-    # Define connectors to split on
-    connectors = ["and", ",", "then", "also", "along with"]
+    result = decompose_prompt_full(prompt)
+    return result.get("subtasks", [prompt])
+
+
+def decompose_prompt_full(prompt: str) -> dict:
+    """
+    Full decomposition with detailed analysis.
     
-    # Check for comparison keywords - if present, do NOT split on "and"
-    comparison_keywords = ["compare", "difference", "vs", "versus"]
-    lower_prompt = prompt.lower()
-    is_comparison = any(keyword in lower_prompt for keyword in comparison_keywords)
-    
-    # Remove "and" from connectors if this is a comparison sentence
-    if is_comparison:
-        connectors = [c for c in connectors if c != "and"]
-    
-    # Build regex pattern for splitting
-    # Use word boundaries for text connectors to avoid splitting mid-word
-    pattern_parts = []
-    for conn in connectors:
-        if conn == ",":
-            pattern_parts.append(re.escape(conn))
-        else:
-            pattern_parts.append(r'\b' + re.escape(conn) + r'\b')
-    
-    pattern = '|'.join(pattern_parts)
-    
-    # Split the prompt (only if we have patterns to split on)
-    if pattern:
-        parts = re.split(pattern, prompt, flags=re.IGNORECASE)
-    else:
-        parts = [prompt]
-    
-    # Clean each part
-    cleaned_parts = []
-    for part in parts:
-        # Strip spaces
-        cleaned = part.strip()
+    Args:
+        prompt: The user's input prompt.
         
-        if not cleaned:
-            continue
-        
-        # Remove duplicate words
-        words = cleaned.split()
-        seen = set()
-        unique_words = []
-        for word in words:
-            lower_word = word.lower()
-            if lower_word not in seen:
-                seen.add(lower_word)
-                unique_words.append(word)
-        
-        cleaned = ' '.join(unique_words)
-        
-        if cleaned:
-            cleaned_parts.append(cleaned)
+    Returns:
+        Dictionary with subtasks and reasoning.
+    """
+    formatted_prompt = DECOMPOSITION_PROMPT.format(prompt=prompt)
+    return call_gemini_json(formatted_prompt)
+
+
+async def decompose_prompt_async(prompt: str) -> dict:
+    """
+    Async version of decomposition for parallel processing.
     
-    # If only one part or no parts, return original prompt
-    if len(cleaned_parts) <= 1:
-        return [prompt.strip()]
-    
-    return cleaned_parts
+    Args:
+        prompt: The user's input prompt.
+        
+    Returns:
+        Dictionary with subtasks and reasoning.
+    """
+    formatted_prompt = DECOMPOSITION_PROMPT.format(prompt=prompt)
+    return await call_gemini_json_async(formatted_prompt)
 
 
 if __name__ == "__main__":
+    import asyncio
+    
     tests = [
         "Explain CNN and compare with RNN",
-        "Summarize this article, then analyze key ideas",
+        "Summarize this article, then analyze key ideas, and write code to implement it",
         "Write code and explain the logic",
-        "Describe neural networks"
+        "Describe neural networks",
+        "Compare Python and JavaScript, then create a sample project in both"
     ]
-    for t in tests:
-        print(t, "→", decompose_prompt(t))
+    
+    async def run_tests():
+        for t in tests:
+            result = await decompose_prompt_async(t)
+            print(f"'{t}' → {result}")
+    
+    asyncio.run(run_tests())

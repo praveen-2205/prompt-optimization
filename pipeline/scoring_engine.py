@@ -1,18 +1,38 @@
 """
-Scores prompts to detect how well-defined they are.
+Scoring Engine Module
 
-This module evaluates the quality of user prompts based on three criteria:
-- Clarity: How clear and actionable the prompt is
-- Specificity: How specific and detailed the prompt is
-- Structure: How well-formatted and organized the prompt is
-
-Each criterion is scored from 0-5, with a total score out of 15.
+Scores prompts to evaluate quality using LLM analysis.
+All scoring is LLM-powered with no hardcoded rules.
 """
+
+try:
+    from pipeline.llm_interface import call_gemini_json, call_gemini_json_async
+except ImportError:
+    from llm_interface import call_gemini_json, call_gemini_json_async
+
+
+SCORING_PROMPT = '''Evaluate the quality of the following user prompt on a scale.
+
+Scoring criteria (0-5 each):
+- Clarity: How clear and understandable is the request?
+- Specificity: How specific and detailed is the prompt?
+- Structure: How well-organized and formatted is the prompt?
+
+User Prompt: "{prompt}"
+
+Respond in JSON format:
+{{
+    "clarity": 0-5,
+    "specificity": 0-5,
+    "structure": 0-5,
+    "total_score": sum of above (0-15),
+    "feedback": "brief feedback on how to improve the prompt"
+}}'''
 
 
 def score_prompt(prompt: str) -> dict:
     """
-    Score a prompt based on clarity, specificity, and structure.
+    Score a prompt based on clarity, specificity, and structure using LLM.
     
     Args:
         prompt: The user prompt to evaluate.
@@ -20,85 +40,44 @@ def score_prompt(prompt: str) -> dict:
     Returns:
         A dictionary containing individual scores and total score.
     """
-    lower_prompt = prompt.lower()
-    words = prompt.split()
-    word_count = len(words)
+    formatted_prompt = SCORING_PROMPT.format(prompt=prompt)
+    return call_gemini_json(formatted_prompt)
+
+
+async def score_prompt_async(prompt: str) -> dict:
+    """
+    Async version of prompt scoring for parallel processing.
     
-    # --- Clarity Score (0-5) ---
-    clarity = 0
-    
-    # +2 if prompt length > 5 words
-    if word_count > 5:
-        clarity += 2
-    
-    # +2 if contains action verbs
-    action_verbs = ["explain", "compare", "build", "analyze", "write"]
-    if any(verb in lower_prompt for verb in action_verbs):
-        clarity += 2
-    
-    # +1 if no vague words
-    vague_words = ["something", "stuff", "things"]
-    if not any(vague in lower_prompt for vague in vague_words):
-        clarity += 1
-    
-    clarity = min(clarity, 5)  # Cap at 5
-    
-    # --- Specificity Score (0-5) ---
-    specificity = 0
-    
-    # +2 if contains technical words
-    technical_words = ["python", "algorithm", "neural", "database", "model"]
-    if any(tech in lower_prompt for tech in technical_words):
-        specificity += 2
-    
-    # +2 if contains constraints
-    constraint_words = ["step", "example", "code", "table"]
-    if any(constraint in lower_prompt for constraint in constraint_words):
-        specificity += 2
-    
-    # +1 if length > 8 words
-    if word_count > 8:
-        specificity += 1
-    
-    specificity = min(specificity, 5)  # Cap at 5
-    
-    # --- Structure Score (0-5) ---
-    structure = 0
-    
-    # +2 if punctuation present
-    punctuation_marks = ["?", ".", ":"]
-    if any(punct in prompt for punct in punctuation_marks):
-        structure += 2
-    
-    # +2 if includes formatting indicators
-    formatting_words = ["list", "table", "bullet", "step"]
-    if any(fmt in lower_prompt for fmt in formatting_words):
-        structure += 2
-    
-    # +1 if starts with capital letter
-    if prompt and prompt[0].isupper():
-        structure += 1
-    
-    structure = min(structure, 5)  # Cap at 5
-    
-    # --- Total Score ---
-    total_score = clarity + specificity + structure
-    
-    return {
-        "clarity": clarity,
-        "specificity": specificity,
-        "structure": structure,
-        "total_score": total_score
-    }
+    Args:
+        prompt: The user prompt to evaluate.
+        
+    Returns:
+        A dictionary containing individual scores and total score.
+    """
+    formatted_prompt = SCORING_PROMPT.format(prompt=prompt)
+    return await call_gemini_json_async(formatted_prompt)
 
 
 if __name__ == "__main__":
+    import asyncio
+    
     tests = [
         "tell me something",
         "Explain neural network architecture with example",
         "Compare CNN and RNN in table format",
-        "Write python code"
+        "Write python code",
+        "Create a comprehensive Python tutorial covering data types, control flow, functions, and OOP with examples"
     ]
-    for t in tests:
-        print(t)
-        print(score_prompt(t))
+    
+    async def run_tests():
+        for t in tests:
+            result = await score_prompt_async(t)
+            print(f"'{t}'")
+            print(f"  Clarity: {result.get('clarity', 'N/A')}")
+            print(f"  Specificity: {result.get('specificity', 'N/A')}")
+            print(f"  Structure: {result.get('structure', 'N/A')}")
+            print(f"  Total: {result.get('total_score', 'N/A')}")
+            print(f"  Feedback: {result.get('feedback', 'N/A')}")
+            print()
+    
+    asyncio.run(run_tests())

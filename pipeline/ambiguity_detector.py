@@ -1,11 +1,37 @@
 """
-Detects whether a prompt is semantically ambiguous even if structurally valid.
+Ambiguity Detector Module
+
+Detects whether a prompt is semantically ambiguous using LLM analysis.
+All detection is LLM-powered with no hardcoded rules.
 """
+
+try:
+    from pipeline.llm_interface import call_gemini_json, call_gemini_json_async
+except ImportError:
+    from llm_interface import call_gemini_json, call_gemini_json_async
+
+
+AMBIGUITY_PROMPT = '''Analyze if the following user prompt is ambiguous or too vague.
+
+A prompt is ambiguous if:
+- It lacks specific domain context (e.g., "explain models" without specifying what kind)
+- It uses vague terms without clarification
+- It could have multiple very different interpretations
+- It's too short to understand the user's actual intent
+
+User Prompt: "{prompt}"
+
+Respond in JSON format:
+{{
+    "is_ambiguous": true/false,
+    "reason": "brief explanation of why it is or isn't ambiguous",
+    "clarification_needed": "what clarification would help (empty string if not ambiguous)"
+}}'''
 
 
 def is_ambiguous(prompt: str) -> bool:
     """
-    Detects whether a prompt is semantically ambiguous even if structurally valid.
+    Detects whether a prompt is semantically ambiguous using LLM.
     
     Args:
         prompt: The user's input prompt.
@@ -13,47 +39,52 @@ def is_ambiguous(prompt: str) -> bool:
     Returns:
         True if the prompt is ambiguous, False otherwise.
     """
-    # Convert to lowercase for matching
-    lower_prompt = prompt.lower()
+    result = detect_ambiguity(prompt)
+    return result.get("is_ambiguous", False)
+
+
+def detect_ambiguity(prompt: str) -> dict:
+    """
+    Full ambiguity detection with detailed analysis.
     
-    # Check word count
-    words = lower_prompt.split()
-    if len(words) < 3:
-        return True
+    Args:
+        prompt: The user's input prompt.
+        
+    Returns:
+        Dictionary with is_ambiguous, reason, and clarification_needed.
+    """
+    formatted_prompt = AMBIGUITY_PROMPT.format(prompt=prompt)
+    return call_gemini_json(formatted_prompt)
+
+
+async def detect_ambiguity_async(prompt: str) -> dict:
+    """
+    Async version of ambiguity detection for parallel processing.
     
-    # Vague domain words
-    vague_words = [
-        "model", "system", "thing", "stuff", "data",
-        "process", "method", "technology", "tool"
-    ]
-    
-    # Domain-specific keywords that provide clarity
-    domain_keywords = [
-        "cnn", "neural", "network", "classification", "regression",
-        "database", "python", "algorithm", "model training",
-        "machine learning", "deep learning"
-    ]
-    
-    # Check if contains vague words
-    has_vague = any(word in lower_prompt for word in vague_words)
-    
-    # Check if contains domain-specific keywords
-    has_domain = any(keyword in lower_prompt for keyword in domain_keywords)
-    
-    # Ambiguous if has vague words but no domain context
-    if has_vague and not has_domain:
-        return True
-    
-    return False
+    Args:
+        prompt: The user's input prompt.
+        
+    Returns:
+        Dictionary with is_ambiguous, reason, and clarification_needed.
+    """
+    formatted_prompt = AMBIGUITY_PROMPT.format(prompt=prompt)
+    return await call_gemini_json_async(formatted_prompt)
 
 
 if __name__ == "__main__":
+    import asyncio
+    
     tests = [
         "Explain models",
-        "Explain machine learning models",
+        "Explain machine learning classification models with examples",
         "Tell me about data",
-        "Tell me about Python data structures",
+        "Tell me about Python data structures like lists and dictionaries",
         "Compare systems"
     ]
-    for t in tests:
-        print(t, "→", is_ambiguous(t))
+    
+    async def run_tests():
+        for t in tests:
+            result = await detect_ambiguity_async(t)
+            print(f"'{t}' → {result}")
+    
+    asyncio.run(run_tests())
