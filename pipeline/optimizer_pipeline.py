@@ -86,31 +86,37 @@ def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
         llm_triggered = True
         working_prompt = llm_rewrite_prompt(working_prompt)
     
-    # STEP 8 — Build optimized output from decomposition and intents
+    # STEP 8 — Run intent detection on EACH subtask for specific instructions
     subtasks = decomposition_result.get("subtasks", [working_prompt])
-    instructions = intent_result.get("instructions", ["Provide a clear and detailed response."])
     
-    # Format output
+    print("[Generating subtask-specific instructions...]")
+    subtask_instructions = []
+    for i, subtask in enumerate(subtasks, 1):
+        print(f"  [Subtask {i}/{len(subtasks)}] Detecting intent for: {subtask[:50]}...")
+        subtask_intent = detect_intents_full(subtask)
+        subtask_instructions.append({
+            "subtask": subtask,
+            "primary_intent": subtask_intent.get("primary_intent", "general"),
+            "instructions": subtask_intent.get("instructions", ["Provide a clear response."])
+        })
+    
+    # Format output with subtask-instruction mapping
     optimized_output = ""
     
     if llm_triggered:
         optimized_output += "[LLM Rewrite Triggered]\n\n"
     
-    # Add subtasks
-    if len(subtasks) > 1:
-        for i, subtask in enumerate(subtasks, 1):
-            optimized_output += f"Sub-Task {i}: {subtask}\n"
+    # Add subtasks with their specific instructions
+    for i, item in enumerate(subtask_instructions, 1):
+        optimized_output += f"## Sub-Task {i}: {item['subtask']}\n"
+        optimized_output += f"   Intent: {item['primary_intent']}\n"
+        optimized_output += "   Instructions:\n"
+        for inst in item["instructions"]:
+            optimized_output += f"   - {inst}\n"
         optimized_output += "\n"
-    else:
-        optimized_output += f"Task: {subtasks[0]}\n\n"
-    
-    # Add instructions
-    optimized_output += "Instructions:\n"
-    for inst in instructions:
-        optimized_output += f"- {inst}\n"
     
     # Add score info
-    optimized_output += f"\n[Quality Score: {total_score}/15]"
+    optimized_output += f"[Quality Score: {total_score}/15]"
     
     # Debug output
     print("----- OPTIMIZED PROMPT -----")
@@ -123,7 +129,7 @@ def optimize_prompt(raw_prompt: str, previous_context: str = None) -> str:
 if __name__ == "__main__":
     tests = [
         ("Explain CNN and compare with RNN", None),
-        ("Write python code for linear regression and explain", None),
+        ("Explain the model", None),
     ]
 
     for prompt, ctx in tests:
